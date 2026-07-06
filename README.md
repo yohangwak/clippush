@@ -2,7 +2,7 @@
 
 **Copy any file on your Mac → hand it to an AI coding agent running on a remote server over SSH.**
 
-Works with **Claude Code, Codex, aider, opencode, Gemini CLI** — anything that can read a file by path. Screenshots, spreadsheets, PDFs, CSVs, logs — multiple files at once. One command bridges your local clipboard and your remote SSH session.
+Works with **Claude Code, Codex, opencode, Gemini CLI, aider** — anything that can read a file by path. Screenshots, spreadsheets, PDFs, CSVs, logs — multiple files at once. One command bridges your local clipboard and your remote SSH session.
 
 ```
 ┌─ Local Mac ────────────────┐        ┌─ Remote server (SSH) ──────────┐
@@ -63,9 +63,9 @@ clippush --setup
 It bakes your current `CLIPPUSH_HOST` and `PATH` into `~/.config/raycast/scripts/clippush.sh` (Raycast runs it in a bare shell that wouldn't otherwise see them — re-run `--setup` if your host changes). Two one-time steps in Raycast:
 
 1. Settings → Extensions → Script Commands → **Add Directories** → choose `~/.config/raycast/scripts`
-2. Find **Push clipboard to server** and set its hotkey to **⌃⌘P** (Raycast stores hotkeys internally, so this step is manual)
+2. Find **Push clipboard to server** and set its hotkey to **`Ctrl+Cmd+P`** (Raycast stores hotkeys internally, so this step is manual)
 
-Then the whole flow is: **`Cmd+C` → `⌃⌘P` → (remote) `Cmd+V`**.
+Then the whole flow is: **`Cmd+C` → `Ctrl+Cmd+P` → (remote) `Cmd+V`**.
 
 **Prefer Alfred, Automator, Karabiner, or another launcher?** The generated `clippush.sh` is just a plain shell script — bind it to any hotkey in the tool you already use.
 
@@ -93,7 +93,7 @@ Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default 
 ## FAQ
 
 **Why not paste the file itself with Cmd+V?**
-Over SSH a remote terminal's `Cmd+V` can only transmit text, not binary — and Claude Code's image paste reads the OS clipboard directly, which a headless server doesn't have. So a binary file can't be "pasted" into a remote session at all; it has to exist on the remote disk and be referenced by path. clippush does the next best thing: after pushing, your clipboard holds a `Read these files: …` instruction, so `Cmd+V` + Enter (or `/clip`) makes Claude read them with one step.
+Over SSH a remote terminal's `Cmd+V` can only transmit text, not binary — and Claude Code's image paste reads the OS clipboard directly, which a headless server doesn't have. So a binary file can't be "pasted" into a remote session at all; it has to exist on the remote disk and be referenced by path. clippush does the next best thing: after pushing, your clipboard holds a `Read these files: …` instruction, so `Cmd+V` + Enter (or `/clip`) makes the agent read them with one step.
 
 **Does it work with tools other than Claude Code?**
 Yes — clippush just puts files on the remote disk and an instruction on your clipboard, so it's tool-agnostic. Only the `/clip` shortcut is Claude Code-specific; everywhere else you paste the instruction or use the tool's own "add file" command:
