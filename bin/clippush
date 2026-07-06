@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+#
+# clippush — push whatever is on your Mac clipboard (files OR screenshots)
+#            to a remote server over SSH, so remote CLI tools like
+#            Claude Code can read them.
+#
+# Usage:
+#   clippush [user@host]        push clipboard content (files or image)
+#   clippush --last             re-copy the last pushed remote paths
+#   clippush --init-remote      install the /clip command on the remote
+#   clippush --clean            wipe the remote inbox
+#   clippush --setup            install a Raycast push hotkey
+#   clippush --help
+#
+# Config (env vars; CLI arg wins over CLIPPUSH_HOST):
+#   CLIPPUSH_HOST   default target host (e.g. "myserver" or "user@1.2.3.4")
+#   CLIPPUSH_DIR    remote inbox dir    (default: ~/.clippush)
+#   CLIPPUSH_KEEP   keep newest N batches on the remote (default: 10)
+
+set -euo pipefail
+
+VERSION="0.1.0"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/clippush"
+LAST_FILE="$CACHE_DIR/last"
+
+# print the header comment block (line 3 → first non-comment line) as help text
+usage() { awk 'NR>=3 && /^#/ {sub(/^# ?/, ""); print; next} NR>=3 {exit}' "$0"; }
+
+# ---------- arg parsing ----------------------------------------------------
+CMD="push"
+HOST_ARG=""
+for a in "$@"; do
+  case "$a" in
+    --last)         CMD="last" ;;
+    --init-remote)  CMD="init" ;;
+    --clean)        CMD="clean" ;;
+    --setup)        CMD="setup" ;;
+    -h|--help)      usage; exit 0 ;;
+    -v|--version)   echo "clippush $VERSION"; exit 0 ;;
+    -*)             echo "unknown option: $a" >&2; exit 1 ;;
+    *)              HOST_ARG="$a" ;;
+  esac
+done
+
+HOST="${HOST_ARG:-${CLIPPUSH_HOST:-}}"
+REMOTE_DIR="${CLIPPUSH_DIR:-.clippush}"   # relative to remote $HOME unless absolute
+KEEP="${CLIPPUSH_KEEP:-10}"               # how many timestamped batches to retain
+
+if [ "$CMD" = "last" ]; then
+  if [ -s "$LAST_FILE" ]; then
+    pbcopy < "$LAST_FILE"
+    echo "📋 copied again:"; sed 's/^/   /' "$LAST_FILE"
+  else
+    echo "nothing pushed yet." >&2; exit 1
+  fi
+  exit 0
+fi
+
+if [ -z "$HOST" ]; then
+  echo "❌ no target host. Set CLIPPUSH_HOST or pass user@host." >&2
+  exit 1
+fi
+
+# ---------- --setup: install a Raycast push hotkey --------------------------
+# Generates a Raycast script command that runs clippush. The current $HOST and
+# PATH are baked in, because Raycast runs the script in a bare shell that does
+# NOT inherit CLIPPUSH_HOST or your PATH. Re-run --setup if HOST changes.
+# (The generated file is a plain shell script — bind it to any launcher you like.)
+if [ "$CMD" = "setup" ]; then
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute path to this script
+  BIN_DIR="$(dirname "$SELF")"
+  PATH_LINE="export PATH=\"$BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\""
+  HOTKEY_HUMAN="⌃⌘P (Control-Cmd-P)"
+
+  dir="$HOME/.config/raycast/scripts"; f="$dir/clippush.sh"
+  mkdir -p "$dir"
+  cat > "$f" <<EOF
+#!/bin/bash
+
+# @raycast.schemaVersion 1
+# @raycast.title Push clipboard to server
+# @raycast.mode compact
+# @raycast.packageName clippush
+# @raycast.icon 📋
+
+$PATH_LINE
+export CLIPPUSH_HOST="$HOST"
+exec "$SELF"
+EOF
+  chmod +x "$f"
+  echo "✅ Raycast launcher written: $f"
+  echo "   Two one-time steps in Raycast (it stores hotkeys internally, so these are manual):"
+  echo "   1. Settings → Extensions → Script Commands → “Add Directories” → choose:"
+  echo "        $dir"
+  echo "   2. Find “Push clipboard to server” → set its Hotkey to $HOTKEY_HUMAN"
+  echo
+  echo "   Prefer Alfred / Automator / another launcher? $f is a plain shell"
+  echo "   script — bind it to any hotkey in the launcher of your choice."
+  open -a Raycast 2>/dev/null || true
+  exit 0
+fi
+
+# quote a string for the remote shell (handles spaces, quotes, unicode)
+shq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
+# ---------- one multiplexed SSH connection for everything -------------------
+CTRL="$(mktemp -u "${TMPDIR:-/tmp}/clippush-cm.XXXXXX")"
+ssh -M -S "$CTRL" -o ControlPersist=15 -fN "$HOST"
+TMP_IMG=""
+cleanup() {
+  ssh -S "$CTRL" -O exit "$HOST" 2>/dev/null || true
+  [ -n "$TMP_IMG" ] && rm -f "$TMP_IMG"
+}
+trap cleanup EXIT
+
+rsh() { ssh -S "$CTRL" "$HOST" "$@"; }
+
+# resolve remote inbox to an absolute path once (also expands ~)
+INBOX="$(rsh "mkdir -p $(shq "$REMOTE_DIR") && cd $(shq "$REMOTE_DIR") && pwd")"
+
+# ---------- subcommands -----------------------------------------------------
+if [ "$CMD" = "clean" ]; then
+  rsh "rm -rf $(shq "$INBOX")"
+  echo "🧹 removed $HOST:$INBOX"
+  exit 0
+fi
+
+if [ "$CMD" = "init" ]; then
+  SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+  CLIP_MD=""
+  for c in "$SRC_DIR/remote/clip.md" \
+           "$HOME/.local/share/clippush/remote/clip.md"; do
+    [ -f "$c" ] && CLIP_MD="$c" && break
+  done
+  if [ -z "$CLIP_MD" ]; then
+    echo "❌ clip.md not found (looked in repo and ~/.local/share/clippush)." >&2; exit 1
+  fi
+  rsh "mkdir -p ~/.claude/commands"
+  scp -q -o ControlPath="$CTRL" "$CLIP_MD" "$HOST:.claude/commands/clip.md"
+  echo "✅ installed /clip command on $HOST (~/.claude/commands/clip.md)"
+  echo "   In Claude Code, type: /clip"
+  exit 0
+fi
+
+# ---------- push: collect clipboard content ---------------------------------
+FILES=()
+# 1) files copied in Finder (supports multiple)
+while IFS= read -r line; do
+  [ -n "$line" ] && [ -e "$line" ] && FILES+=("$line")
+done < <(osascript -l JavaScript -e '
+ObjC.import("AppKit");
+const pb = $.NSPasteboard.generalPasteboard;
+const urls = pb.readObjectsForClassesOptions([$.NSURL], $());
+const out = [];
+if (urls && urls.count) {
+  for (let i = 0; i < urls.count; i++) {
+    const u = urls.objectAtIndex(i);
+    if (u.isFileURL) out.push(u.path.js);
+  }
+}
+out.join("\n");
+' 2>/dev/null || true)
+
+# 2) otherwise, a clipboard image (screenshot) — extracted natively via
+#    NSPasteboard/NSImage, so there's no external pngpaste dependency.
+if [ "${#FILES[@]}" -eq 0 ]; then
+  TMP_IMG="${TMPDIR:-/tmp}/clipboard-$(date +%Y%m%d-%H%M%S).png"
+  ok="$(CLIP_OUT="$TMP_IMG" osascript -l JavaScript -e '
+ObjC.import("AppKit");
+const out = $.NSProcessInfo.processInfo.environment.objectForKey("CLIP_OUT").js;
+const pb  = $.NSPasteboard.generalPasteboard;
+let ok = "", data = pb.dataForType("public.png");           // 1) PNG data as-is
+if (!data || !data.length) {                                 // 2) TIFF data -> PNG
+  const tiff = pb.dataForType("public.tiff");
+  if (tiff && tiff.length) {
+    const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+    if (rep) data = rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary); // 4 = PNG
+  }
+}
+if (!data || !data.length) {                                 // 3) any image -> PNG
+  const img = $.NSImage.alloc.initWithPasteboard(pb);
+  if (img && img.isValid) {
+    const cg = img.CGImageForProposedRectContextHints($(), $(), $());
+    if (cg) { const r = $.NSBitmapImageRep.alloc.initWithCGImage(cg);
+              data = r.representationUsingTypeProperties(4, $.NSDictionary.dictionary); }
+  }
+}
+if (data && data.length && data.writeToFileAtomically(out, true)) ok = "ok";
+ok;
+' 2>/dev/null || true)"
+  if [ "$ok" = "ok" ] && [ -s "$TMP_IMG" ]; then
+    FILES=("$TMP_IMG")
+  else
+    rm -f "$TMP_IMG"; TMP_IMG=""
+    echo "❌ clipboard has no files and no image." >&2
+    echo "   Copy files in Finder (Cmd+C) or take a screenshot (Ctrl+Shift+Cmd+4)." >&2
+    exit 1
+  fi
+fi
+
+# ---------- upload -----------------------------------------------------------
+STAMP="$(date +%Y%m%d-%H%M%S)"
+DEST="$INBOX/$STAMP"
+rsh "umask 077 && mkdir -p $(shq "$DEST") && ln -sfn $(shq "$DEST") $(shq "$INBOX/latest")"
+
+REMOTE_LIST=()
+USED=""   # newline-delimited list of basenames already used in this batch
+for f in "${FILES[@]}"; do
+  base="$(basename "$f")"
+  # de-collide basenames so two files sharing a name don't overwrite each other
+  name="$base"; n=1
+  while printf '%s\n' "$USED" | grep -qxF "$name"; do
+    n=$((n + 1)); stem="${base%.*}"; ext="${base##*.}"
+    if [ "$stem" = "$base" ]; then name="$base-$n"; else name="$stem-$n.$ext"; fi
+  done
+  USED="$USED$name"$'\n'
+  if [ -d "$f" ]; then
+    scp -r -q -o ControlPath="$CTRL" "$f" "$HOST:$(shq "$DEST/$name")"
+  else
+    scp -q -o ControlPath="$CTRL" "$f" "$HOST:$(shq "$DEST/$name")"
+  fi
+  REMOTE_LIST+=("$DEST/$name")
+done
+# files → 0600, directories → 0700 (X grants exec only to dirs/already-exec files)
+rsh "chmod -R u=rwX,go= $(shq "$DEST") 2>/dev/null || true"
+
+# prune old batches, keeping the newest $KEEP (the 'latest' symlink is never matched)
+rsh "cd $(shq "$INBOX") && ls -1dt 20*/ 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r d; do rm -rf \"\$d\"; done" 2>/dev/null || true
+
+# ---------- hand the paths back ---------------------------------------------
+# Copy an actionable instruction (not bare paths) so a single Cmd+V + Enter
+# makes Claude actually read the files. /clip still works too.
+mkdir -p "$CACHE_DIR"
+{
+  echo "Read these files and continue with my request:"
+  printf '%s\n' "${REMOTE_LIST[@]}"
+} | tee "$LAST_FILE" | pbcopy
+
+echo "✅ ${#REMOTE_LIST[@]} file(s) → $HOST"
+printf '   %s\n' "${REMOTE_LIST[@]}"
+echo "📋 copied as a ready-to-paste instruction — Cmd+V into Claude Code, or type /clip"
+
+command -v osascript >/dev/null 2>&1 && \
+  osascript -e "display notification \"${#REMOTE_LIST[@]} file(s) → $HOST\" with title \"clippush\"" 2>/dev/null || true
