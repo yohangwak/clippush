@@ -31,12 +31,13 @@ git clone https://github.com/yohangwak/clippush.git
 cd clippush && ./install.sh
 ```
 
-Then configure your default host and install the `/clip` command on your server:
+Then point clippush at your server — that's the whole setup:
 
 ```bash
-export CLIPPUSH_HOST="user@your-server"   # add to ~/.zshrc
-clippush --init-remote
+export CLIPPUSH_HOST="user@your-server"   # add to ~/.zshrc to keep it
 ```
+
+**Using Claude Code?** Optionally run `clippush --init-remote` once to add a `/clip` shortcut on the server. Everything else works with plain `Cmd+V`.
 
 ## Use
 
