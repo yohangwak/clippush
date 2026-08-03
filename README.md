@@ -20,7 +20,15 @@ Works with **Claude Code, Codex, opencode, Gemini CLI, aider** — anything that
 
 ## Why
 
-Running Claude Code (or Codex, opencode, aider...) on a remote server over SSH is great — until you need to show it something from your local machine. The remote terminal can't see your local clipboard. Pasting an image fails because the server has no display server, and there's simply no such thing as "pasting" an `.xlsx` into a terminal.
+Running Claude Code (or Codex, opencode, aider...) on a remote server over SSH is great — until you need to show it something from your local machine. The remote terminal can't see your local clipboard, so pasting an image just fails. Claude Code says so itself, and tells you what to do instead:
+
+```
+No image found in clipboard. You're SSH'd; try scp?
+```
+
+That's the whole offered workflow: get the file onto disk, switch to a *local* terminal, `scp` it over, then switch back and retype the remote path for the agent. Except a screenshot taken with `Ctrl+Shift+Cmd+4` isn't a file yet — it's clipboard bytes with no path to `scp` — and an `.xlsx` never had a paste story to begin with.
+
+clippush **is** that `scp`, with every step around it removed: copy, run `clippush`, paste.
 
 Existing tools ([clipssh](https://github.com/samuellawrentz/clipssh), [cc-clip](https://github.com/ShunmeiCho/cc-clip)) solve this for **screenshots only**. clippush handles **any file, and multiple files at once** — because half the time what you need to show your agent isn't a screenshot, it's a spreadsheet someone emailed you.
 
@@ -92,6 +100,9 @@ Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default 
 - **`/clip`**: a [Claude Code custom command](https://docs.claude.com/en/docs/claude-code) (a markdown file in `~/.claude/commands/`) that lists `~/.clippush/latest/` and reads every file in it. Zero pasting required.
 
 ## FAQ
+
+**Isn't this just `scp`?**
+`scp` is exactly what it runs — the difference is everything around it. By hand you'd save the screenshot to disk, open a second local terminal, type `scp ~/Desktop/shot.png user@host:/home/user/tmp/`, then switch back and retype `/home/user/tmp/shot.png` for the agent. clippush reads the bytes straight off your clipboard (no file needed first), picks the destination, and puts the remote paths *back* on your clipboard as a ready-to-paste instruction. That return trip is the part plain `scp` can't do.
 
 **Why not paste the file itself with Cmd+V?**
 Over SSH a remote terminal's `Cmd+V` can only transmit text, not binary — and Claude Code's image paste reads the OS clipboard directly, which a headless server doesn't have. So a binary file can't be "pasted" into a remote session at all; it has to exist on the remote disk and be referenced by path. clippush does the next best thing: after pushing, your clipboard holds a `Read these files: …` instruction, so `Cmd+V` + Enter (or `/clip`) makes the agent read them with one step.
