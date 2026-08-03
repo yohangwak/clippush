@@ -150,7 +150,9 @@ while IFS= read -r line; do
 done < <(osascript -l JavaScript -e '
 ObjC.import("AppKit");
 const pb = $.NSPasteboard.generalPasteboard;
-const urls = pb.readObjectsForClassesOptions([$.NSURL], $());
+// $([...]) is required: a bare JS array bridges to an empty object, and the
+// call then fails with "does not implement the NSPasteboardReading protocol".
+const urls = pb.readObjectsForClassesOptions($([$.NSURL]), $());
 const out = [];
 if (urls && urls.count) {
   for (let i = 0; i < urls.count; i++) {
@@ -214,10 +216,14 @@ for f in "${FILES[@]}"; do
     if [ "$stem" = "$base" ]; then name="$base-$n"; else name="$stem-$n.$ext"; fi
   done
   USED="$USED$name"$'\n'
+  # NOTE: no shq() on the destination. Since OpenSSH 9 scp speaks SFTP, which
+  # takes the remote path literally instead of running it through a remote
+  # shell — quotes would be stored as part of the filename and the upload fails
+  # with "No such file or directory". Spaces are still safe: it is one argument.
   if [ -d "$f" ]; then
-    scp -r -q -o ControlPath="$CTRL" "$f" "$HOST:$(shq "$DEST/$name")"
+    scp -r -q -o ControlPath="$CTRL" "$f" "$HOST:$DEST/$name"
   else
-    scp -q -o ControlPath="$CTRL" "$f" "$HOST:$(shq "$DEST/$name")"
+    scp -q -o ControlPath="$CTRL" "$f" "$HOST:$DEST/$name"
   fi
   REMOTE_LIST+=("$DEST/$name")
 done
