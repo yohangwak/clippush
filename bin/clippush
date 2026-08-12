@@ -6,6 +6,7 @@
 #
 # Usage:
 #   clippush [user@host]        push clipboard content (files or image)
+#   clippush --share            push so any account on the server can read
 #   clippush --last             re-copy the last pushed remote paths
 #   clippush --init-remote      install the /clip command on the remote
 #   clippush --clean            wipe the remote inbox
@@ -16,6 +17,7 @@
 #   CLIPPUSH_HOST   default target host (e.g. "myserver" or "user@1.2.3.4")
 #   CLIPPUSH_DIR    remote inbox dir    (default: ~/.clippush)
 #   CLIPPUSH_KEEP   keep newest N batches on the remote (default: 10)
+#   CLIPPUSH_SHARE  set to 1 for --share (agent runs as another user)
 
 set -euo pipefail
 
@@ -29,12 +31,14 @@ usage() { awk 'NR>=3 && /^#/ {sub(/^# ?/, ""); print; next} NR>=3 {exit}' "$0"; 
 # ---------- arg parsing ----------------------------------------------------
 CMD="push"
 HOST_ARG=""
+SHARE="${CLIPPUSH_SHARE:-}"
 for a in "$@"; do
   case "$a" in
     --last)         CMD="last" ;;
     --init-remote)  CMD="init" ;;
     --clean)        CMD="clean" ;;
     --setup)        CMD="setup" ;;
+    --share)        SHARE=1 ;;
     -h|--help)      usage; exit 0 ;;
     -v|--version)   echo "clippush $VERSION"; exit 0 ;;
     -*)             echo "unknown option: $a" >&2; exit 1 ;;
@@ -43,8 +47,15 @@ for a in "$@"; do
 done
 
 HOST="${HOST_ARG:-${CLIPPUSH_HOST:-}}"
-REMOTE_DIR="${CLIPPUSH_DIR:-.clippush}"   # relative to remote $HOME unless absolute
+REMOTE_DIR="${CLIPPUSH_DIR:-}"            # relative to remote $HOME unless absolute
 KEEP="${CLIPPUSH_KEEP:-10}"               # how many timestamped batches to retain
+
+# --share exists because the SSH user isn't always the user that reads the
+# files: agents often run as a service account (Magento's, a deploy user...).
+# It has to move the inbox as well as loosen the mode — a 0750 $HOME blocks
+# that account no matter how readable the files inside are.
+if [ -n "$SHARE" ]; then UMASK="022"; PERM="u=rwX,go=rX"
+else                     UMASK="077"; PERM="u=rwX,go=";  fi
 
 if [ "$CMD" = "last" ]; then
   if [ -s "$LAST_FILE" ]; then
@@ -62,15 +73,21 @@ if [ -z "$HOST" ]; then
 fi
 
 # ---------- --setup: install a Raycast push hotkey --------------------------
-# Generates a Raycast script command that runs clippush. The current $HOST and
+# Generates a Raycast script command that runs clippush. Your current config and
 # PATH are baked in, because Raycast runs the script in a bare shell that does
-# NOT inherit CLIPPUSH_HOST or your PATH. Re-run --setup if HOST changes.
+# NOT inherit CLIPPUSH_* or your PATH. Re-run --setup if that config changes
+# (e.g. `clippush --share --setup` to make the hotkey push in share mode).
 # (The generated file is a plain shell script — bind it to any launcher you like.)
 if [ "$CMD" = "setup" ]; then
   SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute path to this script
   BIN_DIR="$(dirname "$SELF")"
   PATH_LINE="export PATH=\"$BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\""
   HOTKEY_HUMAN="Ctrl+Cmd+P"
+
+  # bake the rest of the config too, for the same reason: a bare shell has none of it
+  ENV_LINES="export CLIPPUSH_HOST=\"$HOST\""
+  [ -n "$REMOTE_DIR" ] && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_DIR=\"$REMOTE_DIR\""
+  [ -n "$SHARE" ]      && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_SHARE=1"
 
   dir="$HOME/.config/raycast/scripts"; f="$dir/clippush.sh"
   mkdir -p "$dir"
@@ -84,7 +101,7 @@ if [ "$CMD" = "setup" ]; then
 # @raycast.icon 📋
 
 $PATH_LINE
-export CLIPPUSH_HOST="$HOST"
+$ENV_LINES
 exec "$SELF"
 EOF
   chmod +x "$f"
@@ -110,13 +127,23 @@ TMP_IMG=""
 cleanup() {
   ssh -S "$CTRL" -O exit "$HOST" 2>/dev/null || true
   [ -n "$TMP_IMG" ] && rm -f "$TMP_IMG"
+  return 0   # bash adopts the trap's status as the script's; without this, a
+             # file push (no temp image, so the test above is false) exits 1
 }
 trap cleanup EXIT
 
 rsh() { ssh -S "$CTRL" "$HOST" "$@"; }
 
-# resolve remote inbox to an absolute path once (also expands ~)
-INBOX="$(rsh "mkdir -p $(shq "$REMOTE_DIR") && cd $(shq "$REMOTE_DIR") && pwd")"
+# resolve remote inbox to an absolute path once (also expands ~). The --share
+# default lives in /var/tmp (mode 1777, so every account can traverse it) and is
+# suffixed remotely with the login name, to stay out of other people's way.
+if   [ -n "$REMOTE_DIR" ]; then DIR_EXPR="$(shq "$REMOTE_DIR")"
+elif [ -n "$SHARE" ];      then DIR_EXPR='"/var/tmp/clippush-$(id -un)"'
+else                            DIR_EXPR="$(shq ".clippush")"; fi
+# only widen the inbox itself when sharing — never silently loosen an existing one
+OPEN_INBOX=""
+[ -n "$SHARE" ] && OPEN_INBOX="chmod u=rwx,go=rx $DIR_EXPR && "
+INBOX="$(rsh "mkdir -p $DIR_EXPR && ${OPEN_INBOX}cd $DIR_EXPR && pwd")"
 
 # ---------- subcommands -----------------------------------------------------
 if [ "$CMD" = "clean" ]; then
@@ -203,7 +230,7 @@ fi
 # ---------- upload -----------------------------------------------------------
 STAMP="$(date +%Y%m%d-%H%M%S)"
 DEST="$INBOX/$STAMP"
-rsh "umask 077 && mkdir -p $(shq "$DEST") && ln -sfn $(shq "$DEST") $(shq "$INBOX/latest")"
+rsh "umask $UMASK && mkdir -p $(shq "$DEST") && ln -sfn $(shq "$DEST") $(shq "$INBOX/latest")"
 
 REMOTE_LIST=()
 USED=""   # newline-delimited list of basenames already used in this batch
@@ -227,8 +254,9 @@ for f in "${FILES[@]}"; do
   fi
   REMOTE_LIST+=("$DEST/$name")
 done
-# files → 0600, directories → 0700 (X grants exec only to dirs/already-exec files)
-rsh "chmod -R u=rwX,go= $(shq "$DEST") 2>/dev/null || true"
+# default: files → 0600, dirs → 0700. --share: 0644 / 0755.
+# (X grants exec only to dirs/already-exec files)
+rsh "chmod -R $PERM $(shq "$DEST") 2>/dev/null || true"
 
 # prune old batches, keeping the newest $KEEP (the 'latest' symlink is never matched)
 rsh "cd $(shq "$INBOX") && ls -1dt 20*/ 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r d; do rm -rf \"\$d\"; done" 2>/dev/null || true

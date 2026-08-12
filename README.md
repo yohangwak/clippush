@@ -78,25 +78,53 @@ Then the whole flow is: **`Cmd+C` → `Ctrl+Cmd+P` → (remote) `Cmd+V`**.
 
 **Prefer Alfred, Automator, Karabiner, or another launcher?** The generated `clippush.sh` is just a plain shell script — bind it to any hotkey in the tool you already use.
 
+## When the agent runs as a different user (optional)
+
+Files land private by default: only your SSH user can read them. That's right almost always, because the agent runs as *you*. But sometimes it doesn't — a coding agent driving a site often runs as that site's service account (`www-data`, `deploy`, an app user) so it can write the app's files. Then your push is invisible to it:
+
+```
+Permission denied
+```
+
+Add `--share` for those pushes:
+
+```bash
+clippush --share
+```
+
+| | default | `--share` |
+|---|---|---|
+| Location | `~/.clippush` | `/var/tmp/clippush-<you>` |
+| Permissions | `0600` — you only | `0644` — any account on the box |
+
+Both halves matter: loosening the file mode alone isn't enough, because a `0750` home directory blocks the other user before it ever reaches the file. `/var/tmp` is world-traversable on every Unix, so this needs no `sudo`, no groups, and nothing installed on the server.
+
+**The tradeoff:** anything you push this way is readable by every account on that server. Use it when those accounts are all yours, and skip it for screenshots with secrets in frame. That's why it's opt-in per push rather than a setting you turn on once and forget.
+
+Pushing that way every time? `clippush --share --setup` bakes it into the Raycast hotkey, or `export CLIPPUSH_SHARE=1` into your shell.
+
+One caveat: `--init-remote` installs `/clip` into *your* home on the server, so an agent running as another user won't have that shortcut (it can't be written there without their permissions). `Cmd+V` works as always — the instruction on your clipboard carries the full paths.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `clippush` | Push clipboard content (files or screenshot) to `$CLIPPUSH_HOST` |
 | `clippush user@host` | Push to a specific host |
+| `clippush --share` | Push readable by any account on the server (agent runs as another user) |
 | `clippush --last` | Put the last pushed remote paths back on your clipboard |
 | `clippush --init-remote` | Install the `/clip` slash command on the server |
 | `clippush --setup` | Install a Raycast push hotkey (writes a script command) |
 | `clippush --clean` | Wipe the remote inbox |
 
-Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default `~/.clippush`), `CLIPPUSH_KEEP` (batches to retain on the server, default `10`).
+Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default `~/.clippush`), `CLIPPUSH_KEEP` (batches to retain on the server, default `10`), `CLIPPUSH_SHARE` (set to `1` for `--share`).
 
 ## How it works
 
 - **File detection**: reads `NSPasteboard` via JXA to get file URLs Finder placed on the clipboard — this is what enables arbitrary files and multi-select, and it's the part screenshot-only tools skip.
 - **Screenshot fallback**: if no files are on the clipboard, extracts the image natively via `NSPasteboard`/`NSImage` (same JXA path as file detection) — no external dependency.
 - **One SSH connection**: opens a temporary `ControlMaster` socket, so pushing 5 files doesn't open 5 SSH sessions. No changes to your `~/.ssh/config` needed.
-- **Tidy & private**: each push lands in its own timestamped folder with `0600` permissions (other users on the server can't read your files), and `latest` always points to the newest batch — which is what `/clip` reads.
+- **Tidy & private**: each push lands in its own timestamped folder with `0600` permissions (other users on the server can't read your files — unless you ask for that with `--share`), and `latest` always points to the newest batch — which is what `/clip` reads.
 - **`/clip`**: a [Claude Code custom command](https://docs.claude.com/en/docs/claude-code) (a markdown file in `~/.claude/commands/`) that lists `~/.clippush/latest/` and reads every file in it. Zero pasting required.
 
 ## FAQ
