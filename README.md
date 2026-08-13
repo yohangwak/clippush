@@ -92,6 +92,8 @@ Add `--share` for those pushes:
 clippush --share
 ```
 
+clippush can't see that failure — it happens inside your agent, after the push succeeded — so it mentions this once, the first time you push to a given server.
+
 | | default | `--share` |
 |---|---|---|
 | Location | `~/.clippush` | `/var/tmp/clippush-<you>` |
