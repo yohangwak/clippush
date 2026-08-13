@@ -274,5 +274,16 @@ echo "✅ ${#REMOTE_LIST[@]} file(s) → $HOST"
 printf '   %s\n' "${REMOTE_LIST[@]}"
 echo "📋 copied as a ready-to-paste instruction — Cmd+V into your agent, or /clip in Claude Code"
 
+# The failure --share exists for happens in the agent ("Permission denied"), not
+# here — clippush never sees it, so the hint has to arrive *before* it does.
+# Once per host, and only while pushing private: enough to be discoverable,
+# quiet enough not to become noise on every push.
+if [ -z "$SHARE" ] && ! grep -qxF "$HOST" "$CACHE_DIR/hosts" 2>/dev/null; then
+  echo "💡 first push to $HOST. These files are readable only by $(rsh 'id -un')."
+  echo "   If your agent says \"Permission denied\", it runs as another user —"
+  echo "   push again with:  clippush --share"
+fi
+grep -qxF "$HOST" "$CACHE_DIR/hosts" 2>/dev/null || echo "$HOST" >> "$CACHE_DIR/hosts"
+
 command -v osascript >/dev/null 2>&1 && \
   osascript -e "display notification \"${#REMOTE_LIST[@]} file(s) → $HOST\" with title \"clippush\"" 2>/dev/null || true
