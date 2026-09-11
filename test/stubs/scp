@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Test double for scp: copies locally into the sandbox "remote" home.
+# Like OpenSSH 9+ (SFTP mode), the remote path is taken literally — no shell.
+set -u
+: "${CLIPPUSH_TEST_REMOTE_HOME:?stub scp only runs inside test/run.sh}"
+echo "scp $*" >> "$CLIPPUSH_TEST_LOG"
+
+recursive=""; args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o|-P|-i)  shift 2 ;;
+    -r)        recursive=1; shift ;;
+    -*)        shift ;;
+    *)         args+=("$1"); shift ;;
+  esac
+done
+[ "${#args[@]}" -ge 2 ] || { echo "stub scp: need source and destination" >&2; exit 1; }
+
+last=$((${#args[@]} - 1))
+dest="${args[$last]#*:}"
+case "$dest" in /*) ;; *) dest="$CLIPPUSH_TEST_REMOTE_HOME/$dest" ;; esac
+
+i=0
+while [ "$i" -lt "$last" ]; do
+  if [ -n "$recursive" ]; then cp -R "${args[$i]}" "$dest" || exit 1
+  else                         cp "${args[$i]}" "$dest"    || exit 1; fi
+  i=$((i + 1))
+done
