@@ -88,6 +88,8 @@ if [ "$CMD" = "setup" ]; then
   ENV_LINES="export CLIPPUSH_HOST=\"$HOST\""
   [ -n "$REMOTE_DIR" ] && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_DIR=\"$REMOTE_DIR\""
   [ -n "$SHARE" ]      && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_SHARE=1"
+  # without this the hotkey prunes to the default 10, deleting batches you kept
+  [ -n "${CLIPPUSH_KEEP:-}" ] && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_KEEP=\"$KEEP\""
 
   dir="$HOME/.config/raycast/scripts"; f="$dir/clippush.sh"
   mkdir -p "$dir"
