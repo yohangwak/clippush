@@ -120,17 +120,82 @@ fi
 # quote a string for the remote shell (handles spaces, quotes, unicode)
 shq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 
-# ---------- one multiplexed SSH connection for everything -------------------
-CTRL="$(mktemp -u "${TMPDIR:-/tmp}/clippush-cm.XXXXXX")"
-ssh -M -S "$CTRL" -o ControlPersist=15 -fN "$HOST"
-TMP_IMG=""
+CTRL=""      # SSH control socket, set once we connect
+TMP_IMG=""   # screenshot written out of the clipboard, if any
 cleanup() {
-  ssh -S "$CTRL" -O exit "$HOST" 2>/dev/null || true
+  [ -n "$CTRL" ] && ssh -S "$CTRL" -O exit "$HOST" 2>/dev/null
   [ -n "$TMP_IMG" ] && rm -f "$TMP_IMG"
   return 0   # bash adopts the trap's status as the script's; without this, a
              # file push (no temp image, so the test above is false) exits 1
 }
 trap cleanup EXIT
+
+# ---------- push: collect clipboard content ---------------------------------
+# Before connecting: with nothing to push, fail right away — no network round
+# trip, no SSH-agent or security-key prompt, and no "connection refused" standing
+# in for what is really an empty clipboard.
+FILES=()
+if [ "$CMD" = "push" ]; then
+  # 1) files copied in Finder (supports multiple)
+  while IFS= read -r line; do
+    [ -n "$line" ] && [ -e "$line" ] && FILES+=("$line")
+  done < <(osascript -l JavaScript -e '
+ObjC.import("AppKit");
+const pb = $.NSPasteboard.generalPasteboard;
+// $([...]) is required: a bare JS array bridges to an empty object, and the
+// call then fails with "does not implement the NSPasteboardReading protocol".
+const urls = pb.readObjectsForClassesOptions($([$.NSURL]), $());
+const out = [];
+if (urls && urls.count) {
+  for (let i = 0; i < urls.count; i++) {
+    const u = urls.objectAtIndex(i);
+    if (u.isFileURL) out.push(u.path.js);
+  }
+}
+out.join("\n");
+' 2>/dev/null || true)
+
+  # 2) otherwise, a clipboard image (screenshot) — extracted natively via
+  #    NSPasteboard/NSImage, so there's no external pngpaste dependency.
+  if [ "${#FILES[@]}" -eq 0 ]; then
+    TMP_IMG="${TMPDIR:-/tmp}/clipboard-$(date +%Y%m%d-%H%M%S).png"
+    ok="$(CLIP_OUT="$TMP_IMG" osascript -l JavaScript -e '
+ObjC.import("AppKit");
+const out = $.NSProcessInfo.processInfo.environment.objectForKey("CLIP_OUT").js;
+const pb  = $.NSPasteboard.generalPasteboard;
+let ok = "", data = pb.dataForType("public.png");           // 1) PNG data as-is
+if (!data || !data.length) {                                 // 2) TIFF data -> PNG
+  const tiff = pb.dataForType("public.tiff");
+  if (tiff && tiff.length) {
+    const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+    if (rep) data = rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary); // 4 = PNG
+  }
+}
+if (!data || !data.length) {                                 // 3) any image -> PNG
+  const img = $.NSImage.alloc.initWithPasteboard(pb);
+  if (img && img.isValid) {
+    const cg = img.CGImageForProposedRectContextHints($(), $(), $());
+    if (cg) { const r = $.NSBitmapImageRep.alloc.initWithCGImage(cg);
+              data = r.representationUsingTypeProperties(4, $.NSDictionary.dictionary); }
+  }
+}
+if (data && data.length && data.writeToFileAtomically(out, true)) ok = "ok";
+ok;
+' 2>/dev/null || true)"
+    if [ "$ok" = "ok" ] && [ -s "$TMP_IMG" ]; then
+      FILES=("$TMP_IMG")
+    else
+      rm -f "$TMP_IMG"; TMP_IMG=""
+      echo "❌ clipboard has no files and no image." >&2
+      echo "   Copy files in Finder (Cmd+C) or take a screenshot (Ctrl+Shift+Cmd+4)." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# ---------- one multiplexed SSH connection for everything -------------------
+CTRL="$(mktemp -u "${TMPDIR:-/tmp}/clippush-cm.XXXXXX")"
+ssh -M -S "$CTRL" -o ControlPersist=15 -fN "$HOST"
 
 rsh() { ssh -S "$CTRL" "$HOST" "$@"; }
 
@@ -167,64 +232,6 @@ if [ "$CMD" = "init" ]; then
   echo "✅ installed /clip command on $HOST (~/.claude/commands/clip.md)"
   echo "   In Claude Code, type: /clip"
   exit 0
-fi
-
-# ---------- push: collect clipboard content ---------------------------------
-FILES=()
-# 1) files copied in Finder (supports multiple)
-while IFS= read -r line; do
-  [ -n "$line" ] && [ -e "$line" ] && FILES+=("$line")
-done < <(osascript -l JavaScript -e '
-ObjC.import("AppKit");
-const pb = $.NSPasteboard.generalPasteboard;
-// $([...]) is required: a bare JS array bridges to an empty object, and the
-// call then fails with "does not implement the NSPasteboardReading protocol".
-const urls = pb.readObjectsForClassesOptions($([$.NSURL]), $());
-const out = [];
-if (urls && urls.count) {
-  for (let i = 0; i < urls.count; i++) {
-    const u = urls.objectAtIndex(i);
-    if (u.isFileURL) out.push(u.path.js);
-  }
-}
-out.join("\n");
-' 2>/dev/null || true)
-
-# 2) otherwise, a clipboard image (screenshot) — extracted natively via
-#    NSPasteboard/NSImage, so there's no external pngpaste dependency.
-if [ "${#FILES[@]}" -eq 0 ]; then
-  TMP_IMG="${TMPDIR:-/tmp}/clipboard-$(date +%Y%m%d-%H%M%S).png"
-  ok="$(CLIP_OUT="$TMP_IMG" osascript -l JavaScript -e '
-ObjC.import("AppKit");
-const out = $.NSProcessInfo.processInfo.environment.objectForKey("CLIP_OUT").js;
-const pb  = $.NSPasteboard.generalPasteboard;
-let ok = "", data = pb.dataForType("public.png");           // 1) PNG data as-is
-if (!data || !data.length) {                                 // 2) TIFF data -> PNG
-  const tiff = pb.dataForType("public.tiff");
-  if (tiff && tiff.length) {
-    const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
-    if (rep) data = rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary); // 4 = PNG
-  }
-}
-if (!data || !data.length) {                                 // 3) any image -> PNG
-  const img = $.NSImage.alloc.initWithPasteboard(pb);
-  if (img && img.isValid) {
-    const cg = img.CGImageForProposedRectContextHints($(), $(), $());
-    if (cg) { const r = $.NSBitmapImageRep.alloc.initWithCGImage(cg);
-              data = r.representationUsingTypeProperties(4, $.NSDictionary.dictionary); }
-  }
-}
-if (data && data.length && data.writeToFileAtomically(out, true)) ok = "ok";
-ok;
-' 2>/dev/null || true)"
-  if [ "$ok" = "ok" ] && [ -s "$TMP_IMG" ]; then
-    FILES=("$TMP_IMG")
-  else
-    rm -f "$TMP_IMG"; TMP_IMG=""
-    echo "❌ clipboard has no files and no image." >&2
-    echo "   Copy files in Finder (Cmd+C) or take a screenshot (Ctrl+Shift+Cmd+4)." >&2
-    exit 1
-  fi
 fi
 
 # ---------- upload -----------------------------------------------------------
