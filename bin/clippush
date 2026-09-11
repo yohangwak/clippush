@@ -238,9 +238,11 @@ for f in "${FILES[@]}"; do
   base="$(basename "$f")"
   # de-collide basenames so two files sharing a name don't overwrite each other
   name="$base"; n=1
-  while printf '%s\n' "$USED" | grep -qxF "$name"; do
+  # (-- because a name can start with "-", which grep would take as an option)
+  while printf '%s\n' "$USED" | grep -qxF -- "$name"; do
     n=$((n + 1)); stem="${base%.*}"; ext="${base##*.}"
-    if [ "$stem" = "$base" ]; then name="$base-$n"; else name="$stem-$n.$ext"; fi
+    # no extension, or a dotfile like .env (empty stem): the counter goes last
+    if [ "$stem" = "$base" ] || [ -z "$stem" ]; then name="$base-$n"; else name="$stem-$n.$ext"; fi
   done
   USED="$USED$name"$'\n'
   # NOTE: no shq() on the destination. Since OpenSSH 9 scp speaks SFTP, which
