@@ -117,9 +117,9 @@ One caveat: `--init-remote` installs `/clip` into *your* home on the server, so 
 | `clippush --last` | Put the last pushed remote paths back on your clipboard |
 | `clippush --init-remote` | Install the `/clip` slash command on the server |
 | `clippush --setup` | Install a Raycast push hotkey (writes a script command) |
-| `clippush --clean` | Wipe the remote inbox |
+| `clippush --clean` | Delete every pushed batch from the remote inbox (anything else in that folder stays) |
 
-Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default `~/.clippush`), `CLIPPUSH_KEEP` (batches to retain on the server, default `10`), `CLIPPUSH_SHARE` (set to `1` for `--share`).
+Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default `~/.clippush`), `CLIPPUSH_KEEP` (batches to retain on the server, a whole number ≥ 1, default `10`), `CLIPPUSH_SHARE` (set to `1` for `--share`).
 
 ## How it works
 
