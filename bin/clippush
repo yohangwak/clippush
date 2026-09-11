@@ -163,8 +163,17 @@ if [ "$CMD" = "init" ]; then
     echo "❌ clip.md not found (looked in repo and ~/.local/share/clippush)." >&2; exit 1
   fi
   rsh "mkdir -p ~/.claude/commands"
-  scp -q -o ControlPath="$CTRL" "$CLIP_MD" "$HOST:.claude/commands/clip.md"
+  if [ -n "$REMOTE_DIR" ]; then
+    # clip.md looks in ~/.clippush. Point it at the inbox CLIPPUSH_DIR resolved
+    # to, or /clip reads a stale ~/.clippush/latest — or nothing at all.
+    NEW="$INBOX" awk '{ s = $0; out = ""
+      while ((i = index(s, "~/.clippush")) > 0) { out = out substr(s, 1, i - 1) ENVIRON["NEW"]; s = substr(s, i + 11) }
+      print out s }' "$CLIP_MD" | rsh "cat > .claude/commands/clip.md"
+  else
+    scp -q -o ControlPath="$CTRL" "$CLIP_MD" "$HOST:.claude/commands/clip.md"
+  fi
   echo "✅ installed /clip command on $HOST (~/.claude/commands/clip.md)"
+  [ -n "$REMOTE_DIR" ] && echo "   It reads $INBOX/latest — run --init-remote again if CLIPPUSH_DIR changes."
   echo "   In Claude Code, type: /clip"
   exit 0
 fi
