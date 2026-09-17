@@ -117,9 +117,9 @@ One caveat: `--init-remote` installs `/clip` into *your* home on the server, so 
 | `clippush --last` | Put the last pushed remote paths back on your clipboard |
 | `clippush --init-remote` | Install the `/clip` slash command on the server |
 | `clippush --setup` | Install a Raycast push hotkey (writes a script command) |
-| `clippush --clean` | Wipe the remote inbox |
+| `clippush --clean` | Delete every pushed batch from the remote inbox (anything else in that folder stays) |
 
-Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default `~/.clippush`), `CLIPPUSH_KEEP` (batches to retain on the server, default `10`), `CLIPPUSH_SHARE` (set to `1` for `--share`).
+Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default `~/.clippush`), `CLIPPUSH_KEEP` (batches to retain on the server, a whole number ≥ 1, default `10`), `CLIPPUSH_SHARE` (set to `1` for `--share`).
 
 ## How it works
 
@@ -127,7 +127,7 @@ Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default 
 - **Screenshot fallback**: if no files are on the clipboard, extracts the image natively via `NSPasteboard`/`NSImage` (same JXA path as file detection) — no external dependency.
 - **One SSH connection**: opens a temporary `ControlMaster` socket, so pushing 5 files doesn't open 5 SSH sessions. No changes to your `~/.ssh/config` needed.
 - **Tidy & private**: each push lands in its own timestamped folder with `0600` permissions (other users on the server can't read your files — unless you ask for that with `--share`), and `latest` always points to the newest batch — which is what `/clip` reads.
-- **`/clip`**: a [Claude Code custom command](https://docs.claude.com/en/docs/claude-code) (a markdown file in `~/.claude/commands/`) that lists `~/.clippush/latest/` and reads every file in it. Zero pasting required.
+- **`/clip`**: a [Claude Code custom command](https://docs.claude.com/en/docs/claude-code) (a markdown file in `~/.claude/commands/`) that lists `~/.clippush/latest/` and reads every file in it. Zero pasting required. With `CLIPPUSH_DIR` set, `--init-remote` points `/clip` at that inbox instead — run it again if you change `CLIPPUSH_DIR`.
 
 ## FAQ
 
@@ -151,6 +151,16 @@ macOS only for now. PRs welcome — the clipboard-reading section is the only pl
 
 - macOS with `ssh`/`scp` (built in) — no other dependencies
 - SSH key auth to your server (no password prompts)
+
+## Development
+
+`bin/clippush` is a single Bash script, and it has to keep running on macOS's stock bash 3.2. The test suite needs no server, clipboard, or Mac: `ssh`, `scp`, `osascript` and `pbcopy` are swapped for local stand-ins in `test/stubs/`, and each test gets its own temporary "remote" home.
+
+```bash
+./test/run.sh                        # everything
+TEST_BASH=/bin/bash ./test/run.sh    # run clippush under macOS's bash 3.2
+./test/run.sh share                  # only tests whose name contains "share"
+```
 
 ## License
 

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Test double for pbcopy: the "clipboard" is a file.
+set -u
+: "${CLIPPUSH_TEST_PASTEBOARD:?stub pbcopy only runs inside test/run.sh}"
+echo "pbcopy" >> "$CLIPPUSH_TEST_LOG"
+cat > "$CLIPPUSH_TEST_PASTEBOARD"
