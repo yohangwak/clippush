@@ -231,7 +231,10 @@ if [ "$CMD" = "clean" ]; then
   # Only what clippush created goes: batch folders and the `latest` symlink.
   # CLIPPUSH_DIR may name a folder that holds other things (even "." = $HOME),
   # so the folder itself is removed only when that leaves it empty.
-  kept="$(rsh "cd $(shq "$INBOX") && { if [ -L latest ]; then rm -f latest; fi; for d in $BATCH_GLOB; do if [ -d \"\$d\" ] && [ ! -L \"\$d\" ]; then rm -rf \"\$d\"; fi; done; cd / && rmdir $(shq "$INBOX") 2>/dev/null || echo kept; }")"
+  # Run through `sh -c`: the login shell may be zsh, which aborts the whole
+  # command on a glob with no matches (an inbox with no batches left).
+  CLEAN_SH='cd "$1" && { if [ -L latest ]; then rm -f latest; fi; for d in '"$BATCH_GLOB"'; do if [ -d "$d" ] && [ ! -L "$d" ]; then rm -rf "$d"; fi; done; cd / && rmdir "$1" 2>/dev/null || echo kept; }'
+  kept="$(rsh "sh -c $(shq "$CLEAN_SH") sh $(shq "$INBOX")")"
   if [ -z "$kept" ]; then
     echo "🧹 removed $HOST:$INBOX"
   else

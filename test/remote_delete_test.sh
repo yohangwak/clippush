@@ -71,3 +71,19 @@ test_CLIPPUSH_KEEP_with_a_leading_zero_is_decimal() {
   assert_eq "$#" 8 "batches kept"
   assert_exists "$PASTEBOARD"
 }
+
+test_clean_works_when_the_server_login_shell_is_zsh() {
+  command -v zsh >/dev/null || fail "zsh is required for this test (macOS ships it)"
+  export CLIPPUSH_TEST_REMOTE_SHELL=zsh
+  clip_files "$(mkfile a.txt)"
+  clippush
+  assert_status 0
+  clippush --clean
+  assert_status 0
+  assert_missing "$REMOTE/.clippush"
+  # again, now with no batches left: zsh aborts on a glob with no matches
+  mkdir -p "$REMOTE/.clippush"
+  clippush --clean
+  assert_status 0
+  assert_missing "$REMOTE/.clippush"
+}
