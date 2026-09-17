@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Test double for open(1): --setup tries to launch Raycast.
+set -u
+echo "open $*" >> "${CLIPPUSH_TEST_LOG:-/dev/null}"
