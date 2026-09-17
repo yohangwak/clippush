@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Test double for osascript. Recognises clippush's two JXA pasteboard readers
+# and answers from env vars instead of the real clipboard:
+#   CLIPPUSH_TEST_CLIP_FILES   newline-separated paths "copied in Finder"
+#   CLIPPUSH_TEST_CLIP_IMAGE   a PNG "on the clipboard" (written to $CLIP_OUT)
+# Anything else (e.g. the notification) is logged and succeeds.
+set -u
+: "${CLIPPUSH_TEST_LOG:?stub osascript only runs inside test/run.sh}"
+
+code=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -e) code="$2"; shift 2 ;;
+    -l) shift 2 ;;
+    *)  shift ;;
+  esac
+done
+
+case "$code" in
+  *readObjectsForClassesOptions*)
+    echo "osascript read-files" >> "$CLIPPUSH_TEST_LOG"
+    # osascript ends its result with a newline — without it `read` drops the last path
+    printf '%s\n' "${CLIPPUSH_TEST_CLIP_FILES:-}" ;;
+  *CLIP_OUT*)
+    echo "osascript read-image" >> "$CLIPPUSH_TEST_LOG"
+    if [ -n "${CLIPPUSH_TEST_CLIP_IMAGE:-}" ] && cp "$CLIPPUSH_TEST_CLIP_IMAGE" "$CLIP_OUT"; then
+      printf 'ok'
+    fi ;;
+  *)
+    echo "osascript $code" >> "$CLIPPUSH_TEST_LOG" ;;
+esac

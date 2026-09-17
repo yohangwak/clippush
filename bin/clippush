@@ -49,6 +49,20 @@ done
 HOST="${HOST_ARG:-${CLIPPUSH_HOST:-}}"
 REMOTE_DIR="${CLIPPUSH_DIR:-}"            # relative to remote $HOME unless absolute
 KEEP="${CLIPPUSH_KEEP:-10}"               # how many timestamped batches to retain
+# a batch folder is named by `date +%Y%m%d-%H%M%S`; pruning and --clean delete
+# only folders with exactly that shape
+BATCH_GLOB='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
+
+# KEEP decides what the prune rm -rf's, so check it before connecting: 0 would
+# delete the batch being pushed, and a non-number used to abort mid-push.
+case "$KEEP" in
+  ""|*[!0-9]*) KEEP=0 ;;
+  *)           KEEP=$((10#$KEEP)) ;;   # 10#: "08" is decimal, not bad octal
+esac
+if [ "$KEEP" -lt 1 ]; then
+  echo "❌ CLIPPUSH_KEEP must be a whole number, 1 or more (got \"${CLIPPUSH_KEEP:-}\")." >&2
+  exit 1
+fi
 
 # --share exists because the SSH user isn't always the user that reads the
 # files: agents often run as a service account (Magento's, a deploy user...).
@@ -88,6 +102,8 @@ if [ "$CMD" = "setup" ]; then
   ENV_LINES="export CLIPPUSH_HOST=\"$HOST\""
   [ -n "$REMOTE_DIR" ] && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_DIR=\"$REMOTE_DIR\""
   [ -n "$SHARE" ]      && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_SHARE=1"
+  # without this the hotkey prunes to the default 10, deleting batches you kept
+  [ -n "${CLIPPUSH_KEEP:-}" ] && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_KEEP=\"$KEEP\""
 
   dir="$HOME/.config/raycast/scripts"; f="$dir/clippush.sh"
   mkdir -p "$dir"
@@ -120,17 +136,84 @@ fi
 # quote a string for the remote shell (handles spaces, quotes, unicode)
 shq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 
-# ---------- one multiplexed SSH connection for everything -------------------
-CTRL="$(mktemp -u "${TMPDIR:-/tmp}/clippush-cm.XXXXXX")"
-ssh -M -S "$CTRL" -o ControlPersist=15 -fN "$HOST"
-TMP_IMG=""
+CTRL=""      # SSH control socket, set once we connect
+TMP_IMG=""   # screenshot written out of the clipboard, if any
 cleanup() {
-  ssh -S "$CTRL" -O exit "$HOST" 2>/dev/null || true
+  # `|| true`: this runs under set -e, so a failing `-O exit` (host down, master
+  # never started) would abort the trap before the temp screenshot is removed
+  [ -n "$CTRL" ] && ssh -S "$CTRL" -O exit "$HOST" 2>/dev/null || true
   [ -n "$TMP_IMG" ] && rm -f "$TMP_IMG"
   return 0   # bash adopts the trap's status as the script's; without this, a
              # file push (no temp image, so the test above is false) exits 1
 }
 trap cleanup EXIT
+
+# ---------- push: collect clipboard content ---------------------------------
+# Before connecting: with nothing to push, fail right away — no network round
+# trip, no SSH-agent or security-key prompt, and no "connection refused" standing
+# in for what is really an empty clipboard.
+FILES=()
+if [ "$CMD" = "push" ]; then
+  # 1) files copied in Finder (supports multiple)
+  while IFS= read -r line; do
+    [ -n "$line" ] && [ -e "$line" ] && FILES+=("$line")
+  done < <(osascript -l JavaScript -e '
+ObjC.import("AppKit");
+const pb = $.NSPasteboard.generalPasteboard;
+// $([...]) is required: a bare JS array bridges to an empty object, and the
+// call then fails with "does not implement the NSPasteboardReading protocol".
+const urls = pb.readObjectsForClassesOptions($([$.NSURL]), $());
+const out = [];
+if (urls && urls.count) {
+  for (let i = 0; i < urls.count; i++) {
+    const u = urls.objectAtIndex(i);
+    if (u.isFileURL) out.push(u.path.js);
+  }
+}
+out.join("\n");
+' 2>/dev/null || true)
+
+  # 2) otherwise, a clipboard image (screenshot) — extracted natively via
+  #    NSPasteboard/NSImage, so there's no external pngpaste dependency.
+  if [ "${#FILES[@]}" -eq 0 ]; then
+    TMP_IMG="${TMPDIR:-/tmp}/clipboard-$(date +%Y%m%d-%H%M%S).png"
+    ok="$(CLIP_OUT="$TMP_IMG" osascript -l JavaScript -e '
+ObjC.import("AppKit");
+const out = $.NSProcessInfo.processInfo.environment.objectForKey("CLIP_OUT").js;
+const pb  = $.NSPasteboard.generalPasteboard;
+let ok = "", data = pb.dataForType("public.png");           // 1) PNG data as-is
+if (!data || !data.length) {                                 // 2) TIFF data -> PNG
+  const tiff = pb.dataForType("public.tiff");
+  if (tiff && tiff.length) {
+    const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+    if (rep) data = rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary); // 4 = PNG
+  }
+}
+if (!data || !data.length) {                                 // 3) any image -> PNG
+  const img = $.NSImage.alloc.initWithPasteboard(pb);
+  if (img && img.isValid) {
+    const cg = img.CGImageForProposedRectContextHints($(), $(), $());
+    if (cg) { const r = $.NSBitmapImageRep.alloc.initWithCGImage(cg);
+              data = r.representationUsingTypeProperties(4, $.NSDictionary.dictionary); }
+  }
+}
+if (data && data.length && data.writeToFileAtomically(out, true)) ok = "ok";
+ok;
+' 2>/dev/null || true)"
+    if [ "$ok" = "ok" ] && [ -s "$TMP_IMG" ]; then
+      FILES=("$TMP_IMG")
+    else
+      rm -f "$TMP_IMG"; TMP_IMG=""
+      echo "❌ clipboard has no files and no image." >&2
+      echo "   Copy files in Finder (Cmd+C) or take a screenshot (Ctrl+Shift+Cmd+4)." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# ---------- one multiplexed SSH connection for everything -------------------
+CTRL="$(mktemp -u "${TMPDIR:-/tmp}/clippush-cm.XXXXXX")"
+ssh -M -S "$CTRL" -o ControlPersist=15 -fN "$HOST"
 
 rsh() { ssh -S "$CTRL" "$HOST" "$@"; }
 
@@ -143,12 +226,28 @@ else                            DIR_EXPR="$(shq ".clippush")"; fi
 # only widen the inbox itself when sharing — never silently loosen an existing one
 OPEN_INBOX=""
 [ -n "$SHARE" ] && OPEN_INBOX="chmod u=rwx,go=rx $DIR_EXPR && "
+# /var/tmp is writable by every account, so someone else can create
+# /var/tmp/clippush-<you> first — as a symlink into your home, or as their own
+# folder. Never chmod, fill, or --clean anything but a real directory you own.
+if [ -n "$SHARE" ] && [ -z "$REMOTE_DIR" ]; then
+  OPEN_INBOX="{ [ ! -L $DIR_EXPR ] && [ -O $DIR_EXPR ] || { echo \"❌ refusing to use \"$DIR_EXPR\": it is a symlink or belongs to another account. Remove it on the server, then push again.\" >&2; exit 1; }; } && $OPEN_INBOX"
+fi
 INBOX="$(rsh "mkdir -p $DIR_EXPR && ${OPEN_INBOX}cd $DIR_EXPR && pwd")"
 
 # ---------- subcommands -----------------------------------------------------
 if [ "$CMD" = "clean" ]; then
-  rsh "rm -rf $(shq "$INBOX")"
-  echo "🧹 removed $HOST:$INBOX"
+  # Only what clippush created goes: batch folders and the `latest` symlink.
+  # CLIPPUSH_DIR may name a folder that holds other things (even "." = $HOME),
+  # so the folder itself is removed only when that leaves it empty.
+  # Run through `sh -c`: the login shell may be zsh, which aborts the whole
+  # command on a glob with no matches (an inbox with no batches left).
+  CLEAN_SH='cd "$1" && { if [ -L latest ]; then rm -f latest; fi; for d in '"$BATCH_GLOB"'; do if [ -d "$d" ] && [ ! -L "$d" ]; then rm -rf "$d"; fi; done; cd / && rmdir "$1" 2>/dev/null || echo kept; }'
+  kept="$(rsh "sh -c $(shq "$CLEAN_SH") sh $(shq "$INBOX")")"
+  if [ -z "$kept" ]; then
+    echo "🧹 removed $HOST:$INBOX"
+  else
+    echo "🧹 removed clippush batches from $HOST:$INBOX (kept the folder: it holds other files)"
+  fi
   exit 0
 fi
 
@@ -178,64 +277,6 @@ if [ "$CMD" = "init" ]; then
   exit 0
 fi
 
-# ---------- push: collect clipboard content ---------------------------------
-FILES=()
-# 1) files copied in Finder (supports multiple)
-while IFS= read -r line; do
-  [ -n "$line" ] && [ -e "$line" ] && FILES+=("$line")
-done < <(osascript -l JavaScript -e '
-ObjC.import("AppKit");
-const pb = $.NSPasteboard.generalPasteboard;
-// $([...]) is required: a bare JS array bridges to an empty object, and the
-// call then fails with "does not implement the NSPasteboardReading protocol".
-const urls = pb.readObjectsForClassesOptions($([$.NSURL]), $());
-const out = [];
-if (urls && urls.count) {
-  for (let i = 0; i < urls.count; i++) {
-    const u = urls.objectAtIndex(i);
-    if (u.isFileURL) out.push(u.path.js);
-  }
-}
-out.join("\n");
-' 2>/dev/null || true)
-
-# 2) otherwise, a clipboard image (screenshot) — extracted natively via
-#    NSPasteboard/NSImage, so there's no external pngpaste dependency.
-if [ "${#FILES[@]}" -eq 0 ]; then
-  TMP_IMG="${TMPDIR:-/tmp}/clipboard-$(date +%Y%m%d-%H%M%S).png"
-  ok="$(CLIP_OUT="$TMP_IMG" osascript -l JavaScript -e '
-ObjC.import("AppKit");
-const out = $.NSProcessInfo.processInfo.environment.objectForKey("CLIP_OUT").js;
-const pb  = $.NSPasteboard.generalPasteboard;
-let ok = "", data = pb.dataForType("public.png");           // 1) PNG data as-is
-if (!data || !data.length) {                                 // 2) TIFF data -> PNG
-  const tiff = pb.dataForType("public.tiff");
-  if (tiff && tiff.length) {
-    const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
-    if (rep) data = rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary); // 4 = PNG
-  }
-}
-if (!data || !data.length) {                                 // 3) any image -> PNG
-  const img = $.NSImage.alloc.initWithPasteboard(pb);
-  if (img && img.isValid) {
-    const cg = img.CGImageForProposedRectContextHints($(), $(), $());
-    if (cg) { const r = $.NSBitmapImageRep.alloc.initWithCGImage(cg);
-              data = r.representationUsingTypeProperties(4, $.NSDictionary.dictionary); }
-  }
-}
-if (data && data.length && data.writeToFileAtomically(out, true)) ok = "ok";
-ok;
-' 2>/dev/null || true)"
-  if [ "$ok" = "ok" ] && [ -s "$TMP_IMG" ]; then
-    FILES=("$TMP_IMG")
-  else
-    rm -f "$TMP_IMG"; TMP_IMG=""
-    echo "❌ clipboard has no files and no image." >&2
-    echo "   Copy files in Finder (Cmd+C) or take a screenshot (Ctrl+Shift+Cmd+4)." >&2
-    exit 1
-  fi
-fi
-
 # ---------- upload -----------------------------------------------------------
 STAMP="$(date +%Y%m%d-%H%M%S)"
 DEST="$INBOX/$STAMP"
@@ -247,9 +288,11 @@ for f in "${FILES[@]}"; do
   base="$(basename "$f")"
   # de-collide basenames so two files sharing a name don't overwrite each other
   name="$base"; n=1
-  while printf '%s\n' "$USED" | grep -qxF "$name"; do
+  # (-- because a name can start with "-", which grep would take as an option)
+  while printf '%s\n' "$USED" | grep -qxF -- "$name"; do
     n=$((n + 1)); stem="${base%.*}"; ext="${base##*.}"
-    if [ "$stem" = "$base" ]; then name="$base-$n"; else name="$stem-$n.$ext"; fi
+    # no extension, or a dotfile like .env (empty stem): the counter goes last
+    if [ "$stem" = "$base" ] || [ -z "$stem" ]; then name="$base-$n"; else name="$stem-$n.$ext"; fi
   done
   USED="$USED$name"$'\n'
   # NOTE: no shq() on the destination. Since OpenSSH 9 scp speaks SFTP, which
@@ -267,8 +310,9 @@ done
 # (X grants exec only to dirs/already-exec files)
 rsh "chmod -R $PERM $(shq "$DEST") 2>/dev/null || true"
 
-# prune old batches, keeping the newest $KEEP (the 'latest' symlink is never matched)
-rsh "cd $(shq "$INBOX") && ls -1dt 20*/ 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r d; do rm -rf \"\$d\"; done" 2>/dev/null || true
+# prune old batches, keeping the newest $KEEP. Only batch-shaped folder names
+# match, so a "2024/" folder in a custom CLIPPUSH_DIR (or `latest`) is left alone.
+rsh "cd $(shq "$INBOX") && ls -1dt $BATCH_GLOB/ 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r d; do rm -rf \"\${d%/}\"; done" 2>/dev/null || true
 
 # ---------- hand the paths back ---------------------------------------------
 # Copy an actionable instruction (not bare paths) so a single Cmd+V + Enter
