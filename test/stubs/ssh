@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Test double for ssh: runs the "remote" command locally, with $HOME pointed at
+# a sandbox directory. Control-master calls (-M ... -N, -O exit) are no-ops.
+set -u
+: "${CLIPPUSH_TEST_REMOTE_HOME:?stub ssh only runs inside test/run.sh}"
+echo "ssh $*" >> "$CLIPPUSH_TEST_LOG"
+
+no_cmd=""; ctl_op=""; host=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -O)               ctl_op=1; shift 2 ;;        # -O exit: stop the master
+    -S|-o|-p|-i|-l)   shift 2 ;;
+    -*)               case "$1" in *N*) no_cmd=1 ;; esac; shift ;;
+    *)                host="$1"; shift; break ;;
+  esac
+done
+[ -n "$host" ] || { echo "stub ssh: no host" >&2; exit 255; }
+# CLIPPUSH_TEST_SSH_FAIL=1 simulates an unreachable host. Like real ssh, that
+# includes `-O exit`: no master was ever started, so there is nothing to stop.
+if [ "${CLIPPUSH_TEST_SSH_FAIL:-}" = 1 ]; then
+  [ -n "$ctl_op" ] && { echo "Control socket connect: No such file or directory" >&2; exit 255; }
+  echo "ssh: connect to host $host: Connection refused" >&2; exit 255
+fi
+[ -n "$ctl_op" ] && exit 0
+[ -n "$no_cmd" ] && exit 0
+
+cmd="$*"                                    # ssh joins the remaining args with spaces
+cmd="${cmd//\/var\/tmp\//$CLIPPUSH_TEST_VARTMP/}"   # keep --share out of the real /var/tmp
+cd "$CLIPPUSH_TEST_REMOTE_HOME" && HOME="$CLIPPUSH_TEST_REMOTE_HOME" exec bash -c "$cmd"

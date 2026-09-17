@@ -152,6 +152,16 @@ macOS only for now. PRs welcome — the clipboard-reading section is the only pl
 - macOS with `ssh`/`scp` (built in) — no other dependencies
 - SSH key auth to your server (no password prompts)
 
+## Development
+
+`bin/clippush` is a single Bash script, and it has to keep running on macOS's stock bash 3.2. The test suite needs no server, clipboard, or Mac: `ssh`, `scp`, `osascript` and `pbcopy` are swapped for local stand-ins in `test/stubs/`, and each test gets its own temporary "remote" home.
+
+```bash
+./test/run.sh                        # everything
+TEST_BASH=/bin/bash ./test/run.sh    # run clippush under macOS's bash 3.2
+./test/run.sh share                  # only tests whose name contains "share"
+```
+
 ## License
 
 MIT
