@@ -123,7 +123,9 @@ shq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 CTRL=""      # SSH control socket, set once we connect
 TMP_IMG=""   # screenshot written out of the clipboard, if any
 cleanup() {
-  [ -n "$CTRL" ] && ssh -S "$CTRL" -O exit "$HOST" 2>/dev/null
+  # `|| true`: this runs under set -e, so a failing `-O exit` (host down, master
+  # never started) would abort the trap before the temp screenshot is removed
+  [ -n "$CTRL" ] && ssh -S "$CTRL" -O exit "$HOST" 2>/dev/null || true
   [ -n "$TMP_IMG" ] && rm -f "$TMP_IMG"
   return 0   # bash adopts the trap's status as the script's; without this, a
              # file push (no temp image, so the test above is false) exits 1
