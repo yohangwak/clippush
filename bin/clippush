@@ -226,6 +226,12 @@ else                            DIR_EXPR="$(shq ".clippush")"; fi
 # only widen the inbox itself when sharing — never silently loosen an existing one
 OPEN_INBOX=""
 [ -n "$SHARE" ] && OPEN_INBOX="chmod u=rwx,go=rx $DIR_EXPR && "
+# /var/tmp is writable by every account, so someone else can create
+# /var/tmp/clippush-<you> first — as a symlink into your home, or as their own
+# folder. Never chmod, fill, or --clean anything but a real directory you own.
+if [ -n "$SHARE" ] && [ -z "$REMOTE_DIR" ]; then
+  OPEN_INBOX="{ [ ! -L $DIR_EXPR ] && [ -O $DIR_EXPR ] || { echo \"❌ refusing to use \"$DIR_EXPR\": it is a symlink or belongs to another account. Remove it on the server, then push again.\" >&2; exit 1; }; } && $OPEN_INBOX"
+fi
 INBOX="$(rsh "mkdir -p $DIR_EXPR && ${OPEN_INBOX}cd $DIR_EXPR && pwd")"
 
 # ---------- subcommands -----------------------------------------------------
