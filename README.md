@@ -69,7 +69,7 @@ Typing `clippush` after every copy gets old. `clippush --setup` writes a [Raycas
 clippush --setup
 ```
 
-It bakes your current `CLIPPUSH_HOST` and `PATH` into `~/.config/raycast/scripts/clippush.sh` (Raycast runs it in a bare shell that wouldn't otherwise see them — re-run `--setup` if your host changes). Two one-time steps in Raycast:
+It bakes your current `PATH` and `CLIPPUSH_*` settings (host, and `CLIPPUSH_DIR`, `CLIPPUSH_KEEP`, `--share` if you use them) into `~/.config/raycast/scripts/clippush.sh` (Raycast runs it in a bare shell that wouldn't otherwise see them — re-run `--setup` if any of them change). Two one-time steps in Raycast:
 
 1. Settings → Extensions → Script Commands → **Add Directories** → choose `~/.config/raycast/scripts`
 2. Find **Push clipboard to server** and set its hotkey to **`Ctrl+Cmd+P`** (Raycast stores hotkeys internally, so this step is manual)
@@ -154,11 +154,12 @@ macOS only for now. PRs welcome — the clipboard-reading section is the only pl
 
 ## Development
 
-`bin/clippush` is a single Bash script, and it has to keep running on macOS's stock bash 3.2. The test suite needs no server, clipboard, or Mac: `ssh`, `scp`, `osascript` and `pbcopy` are swapped for local stand-ins in `test/stubs/`, and each test gets its own temporary "remote" home.
+`bin/clippush` is a single Bash script, and it has to keep running on macOS's stock bash 3.2. The test suite needs no server, clipboard, or Mac (one test needs `zsh`, which macOS ships): `ssh`, `scp`, `osascript` and `pbcopy` are swapped for local stand-ins in `test/stubs/`, and each test gets its own temporary "remote" home.
 
 ```bash
 ./test/run.sh                        # everything
 TEST_BASH=/bin/bash ./test/run.sh    # run clippush under macOS's bash 3.2
+CLIPPUSH_TEST_REMOTE_SHELL=zsh ./test/run.sh   # as if the server's login shell were zsh
 ./test/run.sh share                  # only tests whose name contains "share"
 ```
 
