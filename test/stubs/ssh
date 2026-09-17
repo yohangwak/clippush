@@ -24,6 +24,7 @@ fi
 [ -n "$ctl_op" ] && exit 0
 [ -n "$no_cmd" ] && exit 0
 
+# CLIPPUSH_TEST_REMOTE_SHELL=zsh: the server login shell is zsh (e.g. a macOS server)
 cmd="$*"                                    # ssh joins the remaining args with spaces
 cmd="${cmd//\/var\/tmp\//$CLIPPUSH_TEST_VARTMP/}"   # keep --share out of the real /var/tmp
-cd "$CLIPPUSH_TEST_REMOTE_HOME" && HOME="$CLIPPUSH_TEST_REMOTE_HOME" exec bash -c "$cmd"
+cd "$CLIPPUSH_TEST_REMOTE_HOME" && HOME="$CLIPPUSH_TEST_REMOTE_HOME" exec "${CLIPPUSH_TEST_REMOTE_SHELL:-bash}" -c "$cmd"

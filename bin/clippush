@@ -49,6 +49,20 @@ done
 HOST="${HOST_ARG:-${CLIPPUSH_HOST:-}}"
 REMOTE_DIR="${CLIPPUSH_DIR:-}"            # relative to remote $HOME unless absolute
 KEEP="${CLIPPUSH_KEEP:-10}"               # how many timestamped batches to retain
+# a batch folder is named by `date +%Y%m%d-%H%M%S`; pruning and --clean delete
+# only folders with exactly that shape
+BATCH_GLOB='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
+
+# KEEP decides what the prune rm -rf's, so check it before connecting: 0 would
+# delete the batch being pushed, and a non-number used to abort mid-push.
+case "$KEEP" in
+  ""|*[!0-9]*) KEEP=0 ;;
+  *)           KEEP=$((10#$KEEP)) ;;   # 10#: "08" is decimal, not bad octal
+esac
+if [ "$KEEP" -lt 1 ]; then
+  echo "❌ CLIPPUSH_KEEP must be a whole number, 1 or more (got \"${CLIPPUSH_KEEP:-}\")." >&2
+  exit 1
+fi
 
 # --share exists because the SSH user isn't always the user that reads the
 # files: agents often run as a service account (Magento's, a deploy user...).
@@ -214,8 +228,18 @@ INBOX="$(rsh "mkdir -p $DIR_EXPR && ${OPEN_INBOX}cd $DIR_EXPR && pwd")"
 
 # ---------- subcommands -----------------------------------------------------
 if [ "$CMD" = "clean" ]; then
-  rsh "rm -rf $(shq "$INBOX")"
-  echo "🧹 removed $HOST:$INBOX"
+  # Only what clippush created goes: batch folders and the `latest` symlink.
+  # CLIPPUSH_DIR may name a folder that holds other things (even "." = $HOME),
+  # so the folder itself is removed only when that leaves it empty.
+  # Run through `sh -c`: the login shell may be zsh, which aborts the whole
+  # command on a glob with no matches (an inbox with no batches left).
+  CLEAN_SH='cd "$1" && { if [ -L latest ]; then rm -f latest; fi; for d in '"$BATCH_GLOB"'; do if [ -d "$d" ] && [ ! -L "$d" ]; then rm -rf "$d"; fi; done; cd / && rmdir "$1" 2>/dev/null || echo kept; }'
+  kept="$(rsh "sh -c $(shq "$CLEAN_SH") sh $(shq "$INBOX")")"
+  if [ -z "$kept" ]; then
+    echo "🧹 removed $HOST:$INBOX"
+  else
+    echo "🧹 removed clippush batches from $HOST:$INBOX (kept the folder: it holds other files)"
+  fi
   exit 0
 fi
 
@@ -269,8 +293,9 @@ done
 # (X grants exec only to dirs/already-exec files)
 rsh "chmod -R $PERM $(shq "$DEST") 2>/dev/null || true"
 
-# prune old batches, keeping the newest $KEEP (the 'latest' symlink is never matched)
-rsh "cd $(shq "$INBOX") && ls -1dt 20*/ 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r d; do rm -rf \"\$d\"; done" 2>/dev/null || true
+# prune old batches, keeping the newest $KEEP. Only batch-shaped folder names
+# match, so a "2024/" folder in a custom CLIPPUSH_DIR (or `latest`) is left alone.
+rsh "cd $(shq "$INBOX") && ls -1dt $BATCH_GLOB/ 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r d; do rm -rf \"\${d%/}\"; done" 2>/dev/null || true
 
 # ---------- hand the paths back ---------------------------------------------
 # Copy an actionable instruction (not bare paths) so a single Cmd+V + Enter
