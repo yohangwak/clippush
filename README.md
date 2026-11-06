@@ -39,6 +39,8 @@ git clone https://github.com/yohangwak/clippush.git
 cd clippush && ./install.sh
 ```
 
+**Updating:** `install.sh` copies the script, so pulling alone doesn't change the installed command — run `git pull && ./install.sh` in your clone.
+
 Then point clippush at your server — that's the whole setup:
 
 ```bash
@@ -118,8 +120,9 @@ One caveat: `--init-remote` installs `/clip` into *your* home on the server, so 
 | `clippush --init-remote` | Install the `/clip` slash command on the server |
 | `clippush --setup` | Install a Raycast push hotkey (writes a script command) |
 | `clippush --clean` | Delete every pushed batch from the remote inbox (anything else in that folder stays) |
+| `clippush --help` / `--version` | Show usage / the version |
 
-Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default `~/.clippush`), `CLIPPUSH_KEEP` (batches to retain on the server, a whole number ≥ 1, default `10`), `CLIPPUSH_SHARE` (set to `1` for `--share`).
+Config: `CLIPPUSH_HOST` (default target), `CLIPPUSH_DIR` (remote inbox, default `~/.clippush`), `CLIPPUSH_KEEP` (batches to retain on the server, a whole number ≥ 1, default `10`), `CLIPPUSH_SHARE` (`1` for `--share`; `0` or unset keeps pushes private; any other value is rejected).
 
 ## How it works
 
@@ -154,7 +157,7 @@ macOS only for now. PRs welcome — the clipboard-reading section is the only pl
 
 ## Development
 
-`bin/clippush` is a single Bash script, and it has to keep running on macOS's stock bash 3.2. The test suite needs no server, clipboard, or Mac (one test needs `zsh`, which macOS ships): `ssh`, `scp`, `osascript` and `pbcopy` are swapped for local stand-ins in `test/stubs/`, and each test gets its own temporary "remote" home.
+`bin/clippush` is a single Bash script, and it has to keep running on macOS's stock bash 3.2. The test suite needs no server, clipboard, or Mac (one test needs `zsh`, which macOS ships): `ssh`, `scp`, `osascript`, `pbcopy` and `open` are swapped for local stand-ins in `test/stubs/`, and each test gets its own temporary "remote" home.
 
 ```bash
 ./test/run.sh                        # everything

@@ -139,6 +139,29 @@ test_CLIPPUSH_SHARE_env_enables_share_mode() {
   assert_exists "$CLIPPUSH_TEST_VARTMP/clippush-$(id -un)/latest/a.txt"
 }
 
+test_CLIPPUSH_SHARE_0_keeps_the_push_private() {
+  clip_files "$(mkfile a.txt)"
+  CLIPPUSH_SHARE=0 clippush
+  assert_status 0
+  assert_exists "$REMOTE/.clippush/latest/a.txt"
+  assert_missing "$CLIPPUSH_TEST_VARTMP/clippush-$(id -un)"
+}
+
+test_CLIPPUSH_SHARE_rejects_other_values_before_connecting() {
+  clip_files "$(mkfile a.txt)"
+  CLIPPUSH_SHARE=yes clippush
+  assert_status 1
+  assert_contains "$SANDBOX/err" "CLIPPUSH_SHARE must be"
+  assert_not_contains "$CLIPPUSH_TEST_LOG" "ssh "
+}
+
+test_bad_CLIPPUSH_SHARE_does_not_block_help() {
+  CLIPPUSH_SHARE=yes clippush --help
+  assert_status 0
+  CLIPPUSH_SHARE=yes clippush --version
+  assert_status 0
+}
+
 test_CLIPPUSH_DIR_moves_the_inbox() {
   clip_files "$(mkfile a.txt)"
   CLIPPUSH_DIR="inbox dir" clippush

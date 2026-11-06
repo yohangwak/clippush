@@ -9,7 +9,7 @@
 #   clippush --share            push so any account on the server can read
 #   clippush --last             re-copy the last pushed remote paths
 #   clippush --init-remote      install the /clip command on the remote
-#   clippush --clean            wipe the remote inbox
+#   clippush --clean            delete pushed batches from the remote inbox
 #   clippush --setup            install a Raycast push hotkey
 #   clippush --help
 #
@@ -17,7 +17,7 @@
 #   CLIPPUSH_HOST   default target host (e.g. "myserver" or "user@1.2.3.4")
 #   CLIPPUSH_DIR    remote inbox dir    (default: ~/.clippush)
 #   CLIPPUSH_KEEP   keep newest N batches on the remote (default: 10)
-#   CLIPPUSH_SHARE  set to 1 for --share (agent runs as another user)
+#   CLIPPUSH_SHARE  1 = --share (agent runs as another user); 0 or unset = private
 
 set -euo pipefail
 
@@ -31,7 +31,10 @@ usage() { awk 'NR>=3 && /^#/ {sub(/^# ?/, ""); print; next} NR>=3 {exit}' "$0"; 
 # ---------- arg parsing ----------------------------------------------------
 CMD="push"
 HOST_ARG=""
-SHARE="${CLIPPUSH_SHARE:-}"
+case "${CLIPPUSH_SHARE:-}" in   # only 1 shares; other values are rejected below
+  1) SHARE=1 ;;
+  *) SHARE="" ;;
+esac
 for a in "$@"; do
   case "$a" in
     --last)         CMD="last" ;;
@@ -63,6 +66,13 @@ if [ "$KEEP" -lt 1 ]; then
   echo "❌ CLIPPUSH_KEEP must be a whole number, 1 or more (got \"${CLIPPUSH_KEEP:-}\")." >&2
   exit 1
 fi
+# a value like "yes" or "true" must not silently pick a mode: refuse anything
+# but 1 / 0 / unset (checked after the arg loop, so --help and --version work)
+case "${CLIPPUSH_SHARE:-}" in
+  ""|0|1) ;;
+  *) echo "❌ CLIPPUSH_SHARE must be 1 (share) or 0 / unset (private) (got \"$CLIPPUSH_SHARE\")." >&2
+     exit 1 ;;
+esac
 
 # --share exists because the SSH user isn't always the user that reads the
 # files: agents often run as a service account (Magento's, a deploy user...).
@@ -123,8 +133,10 @@ EOF
   chmod +x "$f"
   echo "✅ Raycast launcher written: $f"
   echo "   Two one-time steps in Raycast (it stores hotkeys internally, so these are manual):"
+  # shellcheck disable=SC1111  # typographic quotes are intended output
   echo "   1. Settings → Extensions → Script Commands → “Add Directories” → choose:"
   echo "        $dir"
+  # shellcheck disable=SC1111  # typographic quotes are intended output
   echo "   2. Find “Push clipboard to server” → set its Hotkey to $HOTKEY_HUMAN"
   echo
   echo "   Prefer Alfred / Automator / another launcher? $f is a plain shell"
@@ -155,6 +167,7 @@ trap cleanup EXIT
 FILES=()
 if [ "$CMD" = "push" ]; then
   # 1) files copied in Finder (supports multiple)
+  # shellcheck disable=SC2016  # expanded by osascript / the remote shell, not here
   while IFS= read -r line; do
     [ -n "$line" ] && [ -e "$line" ] && FILES+=("$line")
   done < <(osascript -l JavaScript -e '
@@ -177,6 +190,7 @@ out.join("\n");
   #    NSPasteboard/NSImage, so there's no external pngpaste dependency.
   if [ "${#FILES[@]}" -eq 0 ]; then
     TMP_IMG="${TMPDIR:-/tmp}/clipboard-$(date +%Y%m%d-%H%M%S).png"
+    # shellcheck disable=SC2016  # expanded by osascript / the remote shell, not here
     ok="$(CLIP_OUT="$TMP_IMG" osascript -l JavaScript -e '
 ObjC.import("AppKit");
 const out = $.NSProcessInfo.processInfo.environment.objectForKey("CLIP_OUT").js;
@@ -220,6 +234,7 @@ rsh() { ssh -S "$CTRL" "$HOST" "$@"; }
 # resolve remote inbox to an absolute path once (also expands ~). The --share
 # default lives in /var/tmp (mode 1777, so every account can traverse it) and is
 # suffixed remotely with the login name, to stay out of other people's way.
+# shellcheck disable=SC2016  # expanded by osascript / the remote shell, not here
 if   [ -n "$REMOTE_DIR" ]; then DIR_EXPR="$(shq "$REMOTE_DIR")"
 elif [ -n "$SHARE" ];      then DIR_EXPR='"/var/tmp/clippush-$(id -un)"'
 else                            DIR_EXPR="$(shq ".clippush")"; fi
@@ -241,6 +256,7 @@ if [ "$CMD" = "clean" ]; then
   # so the folder itself is removed only when that leaves it empty.
   # Run through `sh -c`: the login shell may be zsh, which aborts the whole
   # command on a glob with no matches (an inbox with no batches left).
+  # shellcheck disable=SC2016  # expanded by osascript / the remote shell, not here
   CLEAN_SH='cd "$1" && { if [ -L latest ]; then rm -f latest; fi; for d in '"$BATCH_GLOB"'; do if [ -d "$d" ] && [ ! -L "$d" ]; then rm -rf "$d"; fi; done; cd / && rmdir "$1" 2>/dev/null || echo kept; }'
   kept="$(rsh "sh -c $(shq "$CLEAN_SH") sh $(shq "$INBOX")")"
   if [ -z "$kept" ]; then
