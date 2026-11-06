@@ -11,7 +11,7 @@ an agent running on the server. README.md has the user-facing story.
 | `bin/clippush` | The whole tool — one Bash script. Its `# ----------` headers mark the stages: arg parsing, `--setup`, reading the clipboard, the SSH connection, subcommands, upload, handing paths back |
 | `remote/clip.md` | The `/clip` Claude Code command; `--init-remote` copies it to `~/.claude/commands/` on the server |
 | `install.sh` | Copies `bin/clippush` → `~/.local/bin/` and `clip.md` → `~/.local/share/clippush/remote/` |
-| `test/` | Test suite; `ssh`, `scp`, `osascript`, `pbcopy` are replaced by stand-ins in `test/stubs/` |
+| `test/` | Test suite; `ssh`, `scp`, `osascript`, `pbcopy`, `open` are replaced by stand-ins in `test/stubs/` |
 | `.github/workflows/pullfrog.yml` | Generated Pullfrog agent workflow (manual dispatch only) — don't edit |
 
 ## Commands

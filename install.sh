@@ -17,6 +17,7 @@ case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo ""
      echo "⚠ $BIN_DIR is not in your PATH. Add this to your shell profile:"
+     # shellcheck disable=SC2016  # printed literally for the user to paste
      echo '   export PATH="$HOME/.local/bin:$PATH"' ;;
 esac
 
