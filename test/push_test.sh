@@ -108,11 +108,13 @@ test_empty_clipboard_is_an_error() {
 }
 
 test_default_push_is_private() {
+  umask 022
   mkfile folder/inner.txt >/dev/null
   clip_files "$(mkfile secret.txt)" "$SANDBOX/src/folder"
   clippush
   assert_status 0
   batch="$(latest_batch)"
+  assert_eq "$(mode "$REMOTE/.clippush")" drwx------ "inbox mode"
   assert_eq "$(mode "$batch")" drwx------ "batch dir mode"
   assert_eq "$(mode "$batch/secret.txt")" -rw------- "file mode"
   assert_eq "$(mode "$batch/folder")" drwx------ "copied folder mode"
@@ -208,15 +210,16 @@ test_share_hint_is_shown_once_per_host() {
 }
 
 test_setup_writes_a_raycast_script_with_config_baked_in() {
+  prepare_launcher_probe
   CLIPPUSH_DIR=/data/inbox clippush --share --setup
   assert_status 0
   f="$HOME/.config/raycast/scripts/clippush.sh"
   [ -x "$f" ] || fail "not executable: $f"
   assert_contains "$f" "@raycast.title Push clipboard to server"
-  assert_contains "$f" 'export CLIPPUSH_HOST="testhost"'
-  assert_contains "$f" 'export CLIPPUSH_DIR="/data/inbox"'
-  assert_contains "$f" 'export CLIPPUSH_SHARE=1'
-  assert_contains "$f" "exec \"$CLIPPUSH_BIN\""
+  run_launcher_probe
+  assert_contains "$SANDBOX/launcher-env" 'host=testhost'
+  assert_contains "$SANDBOX/launcher-env" 'dir=/data/inbox'
+  assert_contains "$SANDBOX/launcher-env" 'share=1'
 }
 
 test_init_remote_installs_the_clip_command() {

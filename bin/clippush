@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/clippush"
 LAST_FILE="$CACHE_DIR/last"
 
@@ -31,6 +31,7 @@ usage() { awk 'NR>=3 && /^#/ {sub(/^# ?/, ""); print; next} NR>=3 {exit}' "$0"; 
 # ---------- arg parsing ----------------------------------------------------
 CMD="push"
 HOST_ARG=""
+HOST_ARG_SEEN=""
 case "${CLIPPUSH_SHARE:-}" in   # only 1 shares; other values are rejected below
   1) SHARE=1 ;;
   *) SHARE="" ;;
@@ -45,7 +46,10 @@ for a in "$@"; do
     -h|--help)      usage; exit 0 ;;
     -v|--version)   echo "clippush $VERSION"; exit 0 ;;
     -*)             echo "unknown option: $a" >&2; exit 1 ;;
-    *)              HOST_ARG="$a" ;;
+    *)              if [ -n "$HOST_ARG_SEEN" ]; then
+                      echo "❌ pass only one target host." >&2; exit 1
+                    fi
+                    HOST_ARG="$a"; HOST_ARG_SEEN=1 ;;
   esac
 done
 
@@ -105,15 +109,16 @@ fi
 if [ "$CMD" = "setup" ]; then
   SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute path to this script
   BIN_DIR="$(dirname "$SELF")"
-  PATH_LINE="export PATH=\"$BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\""
+  PATH_LINE="$(printf 'export PATH=%q' "$BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")"
   HOTKEY_HUMAN="Ctrl+Cmd+P"
 
   # bake the rest of the config too, for the same reason: a bare shell has none of it
-  ENV_LINES="export CLIPPUSH_HOST=\"$HOST\""
-  [ -n "$REMOTE_DIR" ] && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_DIR=\"$REMOTE_DIR\""
+  ENV_LINES="$(printf 'export CLIPPUSH_HOST=%q' "$HOST")"
+  [ -n "$REMOTE_DIR" ] && ENV_LINES="$ENV_LINES"$'\n'"$(printf 'export CLIPPUSH_DIR=%q' "$REMOTE_DIR")"
   [ -n "$SHARE" ]      && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_SHARE=1"
   # without this the hotkey prunes to the default 10, deleting batches you kept
-  [ -n "${CLIPPUSH_KEEP:-}" ] && ENV_LINES="$ENV_LINES"$'\n'"export CLIPPUSH_KEEP=\"$KEEP\""
+  [ -n "${CLIPPUSH_KEEP:-}" ] && ENV_LINES="$ENV_LINES"$'\n'"$(printf 'export CLIPPUSH_KEEP=%q' "$KEEP")"
+  EXEC_LINE="$(printf 'exec %q' "$SELF")"
 
   dir="$HOME/.config/raycast/scripts"; f="$dir/clippush.sh"
   mkdir -p "$dir"
@@ -128,7 +133,7 @@ if [ "$CMD" = "setup" ]; then
 
 $PATH_LINE
 $ENV_LINES
-exec "$SELF"
+$EXEC_LINE
 EOF
   chmod +x "$f"
   echo "✅ Raycast launcher written: $f"
@@ -247,7 +252,7 @@ OPEN_INBOX=""
 if [ -n "$SHARE" ] && [ -z "$REMOTE_DIR" ]; then
   OPEN_INBOX="{ [ ! -L $DIR_EXPR ] && [ -O $DIR_EXPR ] || { echo \"❌ refusing to use \"$DIR_EXPR\": it is a symlink or belongs to another account. Remove it on the server, then push again.\" >&2; exit 1; }; } && $OPEN_INBOX"
 fi
-INBOX="$(rsh "mkdir -p $DIR_EXPR && ${OPEN_INBOX}cd $DIR_EXPR && pwd")"
+INBOX="$(rsh "umask $UMASK && mkdir -p $DIR_EXPR && ${OPEN_INBOX}cd $DIR_EXPR && pwd")"
 
 # ---------- subcommands -----------------------------------------------------
 if [ "$CMD" = "clean" ]; then
@@ -281,7 +286,7 @@ if [ "$CMD" = "init" ]; then
   if [ -n "$REMOTE_DIR" ]; then
     # clip.md looks in ~/.clippush. Point it at the inbox CLIPPUSH_DIR resolved
     # to, or /clip reads a stale ~/.clippush/latest — or nothing at all.
-    NEW="$INBOX" awk '{ s = $0; out = ""
+    NEW="$(shq "$INBOX")" awk '{ s = $0; out = ""
       while ((i = index(s, "~/.clippush")) > 0) { out = out substr(s, 1, i - 1) ENVIRON["NEW"]; s = substr(s, i + 11) }
       print out s }' "$CLIP_MD" | rsh "cat > .claude/commands/clip.md"
   else
@@ -328,7 +333,10 @@ rsh "chmod -R $PERM $(shq "$DEST") 2>/dev/null || true"
 
 # prune old batches, keeping the newest $KEEP. Only batch-shaped folder names
 # match, so a "2024/" folder in a custom CLIPPUSH_DIR (or `latest`) is left alone.
-rsh "cd $(shq "$INBOX") && ls -1dt $BATCH_GLOB/ 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r d; do rm -rf \"\${d%/}\"; done" 2>/dev/null || true
+# Keep glob expansion in POSIX sh, as with --clean.
+# shellcheck disable=SC2016  # expanded by the remote shell, not here
+PRUNE_SH='cd "$1" && ls -1dt '"$BATCH_GLOB"'/ 2>/dev/null | tail -n +"$2" | while read -r d; do rm -rf "${d%/}"; done'
+rsh "sh -c $(shq "$PRUNE_SH") sh $(shq "$INBOX") $((KEEP + 1))" 2>/dev/null || true
 
 # ---------- hand the paths back ---------------------------------------------
 # Copy an actionable instruction (not bare paths) so a single Cmd+V + Enter

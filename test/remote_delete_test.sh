@@ -4,6 +4,16 @@
 # the `latest` symlink. CLIPPUSH_DIR can point at a folder that holds other data.
 
 test_prune_leaves_folders_clippush_did_not_create() {
+  # Observe the shell boundary as well as retention: a zsh login shell must
+  # delegate pruning to POSIX sh, even though the new batch always matches.
+  mkdir -p "$SANDBOX/remote-bin"
+  cat > "$SANDBOX/remote-bin/sh" <<'EOF'
+#!/bin/sh
+echo 'POSIX sh invoked' >> "$CLIPPUSH_TEST_LOG"
+exec /bin/sh "$@"
+EOF
+  chmod +x "$SANDBOX/remote-bin/sh"
+  export PATH="$SANDBOX/remote-bin:$PATH" CLIPPUSH_TEST_REMOTE_SHELL=zsh
   mkdir -p "$REMOTE/shared/2023" "$REMOTE/shared/2024-taxes"
   echo keep > "$REMOTE/shared/2023/report.pdf"
   touch -t 202301010000 "$REMOTE/shared/2023" "$REMOTE/shared/2024-taxes"
@@ -11,6 +21,7 @@ test_prune_leaves_folders_clippush_did_not_create() {
   clip_files "$(mkfile a.txt)"
   CLIPPUSH_DIR=shared CLIPPUSH_KEEP=1 clippush
   assert_status 0
+  assert_contains "$CLIPPUSH_TEST_LOG" 'POSIX sh invoked'
   assert_exists "$REMOTE/shared/2023/report.pdf"
   assert_exists "$REMOTE/shared/2024-taxes"
   assert_missing "$REMOTE/shared/20200101-000000"
