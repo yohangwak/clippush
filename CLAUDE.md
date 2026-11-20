@@ -63,3 +63,5 @@ There is no build step, no dependency manifest, and no CI.
 
 There is nothing to deploy. Users `git clone` and run `./install.sh`, so a merge
 to `main` is the release. `VERSION` in `bin/clippush` is informational.
+
+- 할 일 목록(`BACKLOG.md`)에는 **해야 할 일만** 둔다 — 끝난 행은 `[x]` 로 닫고 원문 그대로 `docs/archive/todo/YYYY-MM.md` 로 옮긴다(요한님 맥: `python3 ~/Repos/yohangwak/ai-assistant/bin/todo-archive.py apply --todo BACKLOG.md --archive-dir docs/archive/todo` — 잃는 줄 0 검사. 손으로 옮길 때는 열린 하위 행이 있는 행은 남긴다). 행은 무엇 + 근거 위치 한 줄(경위·대화 인용·PR 해시는 PR 본문·`docs/`). 남은 판정 예약(⏰)·요한님 결정(🙋)은 비서 `TODO.md` 에도 행으로(이유: 목록이 일지가 되면 할 일이 묻힌다).
